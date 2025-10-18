@@ -1,7 +1,8 @@
 import { EMAIL_VERIFY_TEMPLATE, PASSWORD_RESET_TEMPLATE } from "../../frontend/src/assets/emailTemplates.js";
 import transporter from "../config/nodeMailer.js";
+import redis from "../config/redis.js";
 import setCookies from "../lib/Cookies.js";
-import { generateToken, verifyToken } from "../lib/Token.js";
+import { generateToken, getStoredRefreshToken, removeRefreshToken, storeRefreshToken, verifyToken } from "../lib/Token.js";
 import User from "../model/User.js";
 
 export const register = async (req, res) => {
@@ -17,6 +18,7 @@ export const register = async (req, res) => {
         const user = await User.create({ name, email, password });
         const { accesToken, refreshToken } = await generateToken(user._id);
         setCookies(res, accesToken, refreshToken);
+        storeRefreshToken(user._id, refreshToken);
 
         user.password = undefined;
 
@@ -86,6 +88,7 @@ export const login = async (req, res) => {
         }
         const { accesToken, refreshToken } = await generateToken(user._id);
         setCookies(res, accesToken, refreshToken);
+        storeRefreshToken(user._id, refreshToken);
         user.password = undefined;
         res.status(200).json({ message: 'User logged in successfully', 
             user: {
@@ -113,6 +116,7 @@ export const logout = async (req, res) => {
         }
         res.clearCookie('accessToken');
         res.clearCookie('refreshToken');
+        await removeRefreshToken(decoded.id);
         res.status(200).json({ message: 'User logged out successfully' });
     }catch(err){
         console.error(err);
@@ -129,6 +133,10 @@ export const refreshToken = async (req, res) => {
         const decoded = await verifyToken(refreshToken, 'refresh');
         if(!decoded){
             return res.status(400).json({ message: 'Invalid refresh token' });
+        }
+        const storedToken = await getStoredRefreshToken(decoded.id);
+        if(storedToken !== refreshToken){
+            return  res.status(400).json({ message: 'Refresh token mismatch' });
         }
         const { accesToken: newAccessToken, refreshToken: newRefreshToken } = await generateToken(decoded.id);
         setCookies(res, newAccessToken, newRefreshToken);
@@ -208,7 +216,7 @@ export const sendOtp = async (req, res) => {
 export const verifyOtp = async (req, res) => {
     try{
         const userId =  req?.user?._id;
-        const otp = req?.body?.otp || req?.body?.verifyOtp;
+        const otp = req?.body?.otp;
         if(!userId) return res.status(400).json({ message: 'userId is required' });
         if(!otp) return res.status(400).json({ message: 'OTP is required' });
         const user = await User.findById(userId);
